@@ -18,6 +18,7 @@ HOW TO TEST:
     pytest tests/test_eligibility.py -v
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -30,6 +31,12 @@ class RuleCheck:
     scheme_limit: str     # what the scheme requires, e.g. "≤ ₹3,00,000"
     passed: bool
     detail: Optional[str] = None  # extra context, e.g. "₹20,000 under the limit"
+    is_gate: bool = True  # if False, shown for transparency but does NOT block
+                           # overall eligibility -- used for inherently soft/
+                           # subjective checks like purpose matching, where
+                           # free-text descriptions rarely match official
+                           # scheme wording exactly. Purpose fit still affects
+                           # RANKING via matching_engine.py's scoring.
 
 
 @dataclass
@@ -76,7 +83,14 @@ def check_eligibility(user_profile: dict, scheme: dict) -> EligibilityResult:
     # --- Rule 1: Category / target group match ---
     target_groups = scheme.get("targetGroups") or []
     user_category = (user_profile.get("category") or "").strip().lower()
-    category_match = any(user_category in tg.lower() for tg in target_groups) if user_category else False
+    # Word-boundary match, NOT substring match -- a naive substring check
+    # would incorrectly match "SC" against "ST (Scheduled Tribes)", since
+    # "sc" is literally contained inside the word "Scheduled". Caught by
+    # a Day 4 matching-engine test that surfaced an SC user ranking against
+    # an ST-only scheme.
+    def _category_tokens(text):
+        return set(re.findall(r"[a-z]+", text.lower()))
+    category_match = any(user_category in _category_tokens(tg) for tg in target_groups) if user_category else False
     trace.append(RuleCheck(
         rule="Category",
         user_value=user_profile.get("category", "not provided"),
@@ -204,9 +218,10 @@ def check_eligibility(user_profile: dict, scheme: dict) -> EligibilityResult:
         user_value=user_profile.get("purpose") or user_profile.get("business_type") or "not provided",
         scheme_limit=", ".join(supported_purposes) if supported_purposes else "any purpose",
         passed=purpose_match,
+        is_gate=False,  # soft signal only -- see RuleCheck.is_gate docstring above
     ))
 
-    overall_eligible = all(check.passed for check in trace)
+    overall_eligible = all(check.passed for check in trace if check.is_gate)
 
     return EligibilityResult(
         scheme_id=scheme.get("schemeId"),

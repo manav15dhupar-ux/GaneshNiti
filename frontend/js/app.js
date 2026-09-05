@@ -61,14 +61,22 @@ function renderSchemeCard(scheme) {
     ? `<span class="badge badge-eligible">Potentially eligible</span>`
     : `<span class="badge badge-ineligible">Not eligible</span>`;
 
-  const reasons = (scheme.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
+  // The numeric trace IS the differentiator -- show every rule checked,
+  // not just a final yes/no.
+  const traceRows = (scheme.trace || []).map(t => {
+    const icon = t.passed ? "&#10003;" : "&#10007;";
+    const detail = t.detail ? ` (${escapeHtml(t.detail)})` : "";
+    return `<li>${icon} <strong>${escapeHtml(t.rule)}:</strong> ${escapeHtml(String(t.userValue))} vs ${escapeHtml(String(t.schemeLimit))}${detail}</li>`;
+  }).join("");
 
-  const emiBlock = scheme.emi
-    ? `<p class="mb-1"><strong>Estimated EMI:</strong> ₹${scheme.emi.monthlyEmi.toLocaleString("en-IN")}/month</p>`
+  const repaymentBlock = scheme.repayment
+    ? `<p class="mb-1"><strong>Quarterly repayment:</strong> &#8377;${scheme.repayment.quarterlyInstallment.toLocaleString("en-IN")}
+       (${scheme.repayment.numInstallments} installments at ${scheme.repayment.annualInterestRate}% p.a.)</p>`
     : "";
 
-  const docsBlock = (scheme.requiredDocuments && scheme.requiredDocuments.length)
-    ? `<p class="mb-1 mt-2"><strong>Documents needed:</strong></p><ul>${scheme.requiredDocuments.map(d => `<li>${escapeHtml(d)}</li>`).join("")}</ul>`
+  const partnersBlock = (scheme.suggestedPartners && scheme.suggestedPartners.length)
+    ? `<p class="mb-1 mt-2"><strong>Suggested Channel Partner</strong> <span class="simulated-note">simulated data</span></p>
+       <ul>${scheme.suggestedPartners.map(p => `<li>${escapeHtml(p.partnerName)} (${escapeHtml(p.partnerType)}, ${escapeHtml(p.district || p.state)})</li>`).join("")}</ul>`
     : "";
 
   return `
@@ -79,10 +87,9 @@ function renderSchemeCard(scheme) {
           <span class="match-score">${scheme.matchScore}</span>
         </div>
         ${badge}
-        <ul class="mt-3">${reasons}</ul>
-        ${emiBlock}
-        ${docsBlock}
-        <a href="${scheme.officialSourceUrl}" target="_blank" rel="noopener" class="d-block mt-3 small">Official source ↗</a>
+        <ul class="mt-3" style="font-size:0.85rem;">${traceRows}</ul>
+        ${repaymentBlock}
+        ${partnersBlock}
       </div>
     </div>
   `;
@@ -94,16 +101,45 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// Profile form: for now (Day 2), just carries you to the results page.
-// On Day 3, this becomes a real fetch() POST to /recommend.
+const API_BASE = "http://127.0.0.1:8000"; // change this if your backend runs elsewhere
+
+// Profile form: collects the real form fields + free text, sends them to
+// the real backend, and stores the response so results.html can render it.
 document.addEventListener("DOMContentLoaded", () => {
   const form = document.getElementById("profile-form");
   if (!form) return;
 
-  form.addEventListener("submit", (e) => {
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    // Day 3 TODO: collect these values and POST them to /recommend instead
-    // of just redirecting straight to the dummy results page.
-    window.location.href = "results.html";
+
+    const payload = {
+      category: document.getElementById("category").value,
+      state: document.getElementById("state").value,
+      annualIncome: Number(document.getElementById("income").value) || null,
+      businessType: document.getElementById("businessType").value,
+      amountRequired: Number(document.getElementById("amount").value) || null,
+      requirement: document.getElementById("requirement").value,
+    };
+
+    try {
+      const response = await fetch(`${API_BASE}/recommend`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Backend returned ${response.status}`);
+      }
+
+      const data = await response.json();
+      // sessionStorage survives the redirect to results.html but clears
+      // when the tab closes -- fine for a demo, no backend session needed.
+      sessionStorage.setItem("recommendResults", JSON.stringify(data.results));
+      window.location.href = "results.html";
+    } catch (err) {
+      console.error("Failed to get recommendation:", err);
+      alert("Couldn't reach the backend. Is it running? (uvicorn main:app --reload)");
+    }
   });
 });
